@@ -1,0 +1,41 @@
+
+name: C++
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  release:
+    types:
+      - published
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build
+        run: |
+          mkdir -p lib/build
+          cd lib/build
+          cmake -DCMAKE_BUILD_TYPE=Debug ..
+          cmake --build . --parallel 2
+
+      - name: Run tests
+        run: |
+          cd c++/build
+          ctest -C Debug
+        env:
+          CTEST_OUTPUT_ON_FAILURE: 1
