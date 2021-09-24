@@ -8,7 +8,6 @@ from jax import random
 from jax.flatten_util import ravel_pytree
 
 from .hamiltonian import System
-from .integrator import integrate
 
 HMCState = namedtuple(
     "HMCState",
@@ -18,6 +17,7 @@ HMCState = namedtuple(
         "accept_prob",
         "accept",
         "diverging",
+        "step_size",
         "sample_stats",
         "rng_key",
         "kinetic_state",
@@ -37,9 +37,10 @@ def hmc(system: System, rng_key, num_steps=50):
             accept_prob=0.0,
             accept=False,
             diverging=False,
+            step_size=0.001,
             sample_stats=system.integrator_info_init,
             rng_key=rng_key,
-            kinetic_state=system.kinetic_init_fn(ravel_pytree(q).size),
+            kinetic_state=system.kinetic_init_fn(ravel_pytree(q)[0].size),
             step_size_state=step_size_init_fn(),
         )
 
@@ -47,23 +48,25 @@ def hmc(system: System, rng_key, num_steps=50):
         rng_mom, rng_accept, rng_next = random.split(state.rng_key, 3)
 
         p = system.momentum_fn(state.kinetic_state, state.q, rng_mom)
-        initial_state = system.integrator_init_fn(state.q, p)
+        initial_coords = system.integrator_init_fn(
+            state.kinetic_state, state.q, p
+        )
         initial_energy = state.potential_energy + system.kinetic_fn(
             state.kinetic_state, state.q, p
         )
 
-        final_state, info = jax.lax.fori_loop(
+        final_coords, info = jax.lax.fori_loop(
             0,
             num_steps,
-            lambda _, state: system.integrator_update_fn(
-                state, epsilon=state.step_size
+            lambda _, coords: system.integrator_update_fn(
+                state.kinetic_state, coords, epsilon=state.step_size
             ),
-            initial_state,
+            initial_coords,
         )
 
-        potential_energy = system.potential_fn(final_state.q)
+        potential_energy = system.potential_fn(final_coords.q)
         kinetic_energy = system.kinetic_fn(
-            final_state.kinetic_state, final_state.q, final_state.p
+            state.kinetic_state, final_coords.q, final_coords.p
         )
         energy = potential_energy + kinetic_energy
 
@@ -74,18 +77,23 @@ def hmc(system: System, rng_key, num_steps=50):
         accept = random.bernoulli(rng_accept, accept_prob)
 
         new_state = HMCState(
-            q=final_state.q,
+            q=final_coords.q,
             potential_energy=potential_energy,
             accept_prob=accept_prob,
             accept=accept,
             diverging=diverging,
+            step_size=state.step_size,
             sample_stats=info,
             rng_key=rng_next,
             kinetic_state=state.kinetic_state,
             step_size_state=state.step_size_state,
         )
 
-        return jax.lax.cond(accept, lambda _: new_state, lambda _: state, operand=None)
+        return jax.lax.cond(
+            accept, lambda _: new_state, lambda _: state, operand=None
+        )
+
+    return init_fn, update_fn
 
 
 def dual_averaging(t0=10, kappa=0.75, gamma=0.05):

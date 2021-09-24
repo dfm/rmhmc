@@ -1,4 +1,4 @@
-__all__ = ["integrate", "velocity_verlet", "implicit_midpoint"]
+__all__ = ["velocity_verlet", "implicit_midpoint"]
 
 from collections import namedtuple
 
@@ -12,23 +12,17 @@ ImplicitState = namedtuple("ImplicitState", ["q", "p", "dHdq", "dHdp"])
 SolverInfo = namedtuple("SolverInfo", ["iterations", "success"])
 
 
-def integrate(integrator, potential_fn, kinetic_fn, q, p, epsilon, steps):
-    init_fn, update_fn = integrator(potential_fn, kinetic_fn)
-    init = init_fn(q, p)
-    return jax.lax.fori_loop(
-        0, steps, lambda _, state: update_fn(state, epsilon=epsilon), init
-    )
-
-
 def velocity_verlet(potential_fn, kinetic_fn):
     dU = jax.grad(potential_fn)
 
-    def init_fn(q, p):
+    def init_fn(_, q, p):
         return VerletState(q, p, dU(q)), None
 
-    def update_fn(state, *, epsilon):
-        p = tree_map(lambda p, dUdq: p - 0.5 * epsilon * dUdq, state.p, state.dUdq)
-        dTdp = jax.grad(kinetic_fn, argnums=1)(None, p)
+    def update_fn(kinetic_state, state, *, epsilon):
+        p = tree_map(
+            lambda p, dUdq: p - 0.5 * epsilon * dUdq, state.p, state.dUdq
+        )
+        dTdp = jax.grad(kinetic_fn, argnums=2)(kinetic_state, None, p)
         q = tree_map(lambda q, dTdp: q + epsilon * dTdp, state.q, dTdp)
         dUdq = dU(q)
         p = tree_map(lambda p, dUdq: p - 0.5 * epsilon * dUdq, p, dUdq)
@@ -38,21 +32,24 @@ def velocity_verlet(potential_fn, kinetic_fn):
 
 
 def implicit_midpoint(potential_fn, kinetic_fn, **solver_kwargs):
-    hamiltonian = lambda q, p: potential_fn(q) + kinetic_fn(q, p)
-    vector_field = jax.grad(hamiltonian, argnums=(0, 1))
+    hamiltonian = lambda state, q, p: potential_fn(q) + kinetic_fn(state, q, p)
+    vector_field = jax.grad(hamiltonian, argnums=(1, 2))
     info_init = dict(iterations=0, success=True)
 
-    def init_fn(q, p):
-        dHdq, dHdp = vector_field(q, p)
+    def init_fn(state, q, p):
+        dHdq, dHdp = vector_field(state, q, p)
         return ImplicitState(q, p, dHdq, dHdp), info_init
 
-    def update_fn(value, *, epsilon):
+    def update_fn(kinetic_state, value, *, epsilon):
         state, info0 = value
 
         def step(args):
             q, p = args
-            dHdq, dHdp = vector_field(q, p)
-            return state.q + 0.5 * epsilon * dHdp, state.p - 0.5 * epsilon * dHdq
+            dHdq, dHdp = vector_field(kinetic_state, q, p)
+            return (
+                state.q + 0.5 * epsilon * dHdp,
+                state.p - 0.5 * epsilon * dHdq,
+            )
 
         # Use an initial half step using the pre-computed vector field
         q = state.q + 0.5 * epsilon * state.dHdp
@@ -102,6 +99,8 @@ def solve_fixed_point(
         return n + 1, xn, norm
 
     x = func(x0)
-    n, x, norm = jax.lax.while_loop(cond_fn, body_fn, (0, x, compute_norm(x, x0)))
+    n, x, norm = jax.lax.while_loop(
+        cond_fn, body_fn, (0, x, compute_norm(x, x0))
+    )
     success = jnp.isfinite(norm) & (norm <= convergence_tol)
     return x, SolverInfo(iterations=n, success=success)
