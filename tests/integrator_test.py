@@ -1,23 +1,22 @@
-# type: ignore
-
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Dict, NamedTuple, OrderedDict
+from typing import Any, Callable, Dict, NamedTuple, OrderedDict, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from rmhmc.base_types import Momentum, Position
+from rmhmc.base_types import Array, Momentum, Position, Scalar
 from rmhmc.hamiltonian import System, euclidean, riemannian
+from rmhmc.integrator import IntegratorState
 
 
-def sho(use_euclidean):
-    def log_posterior(q):
+def sho(use_euclidean: bool) -> System:
+    def log_posterior(q: Position) -> Scalar:
         return -0.5 * jnp.sum(q ** 2)
 
-    def metric(q):
+    def metric(q: Position) -> Array:
         return jnp.diag(jnp.ones_like(q))
 
     if use_euclidean:
@@ -25,11 +24,11 @@ def sho(use_euclidean):
     return riemannian(log_posterior, metric)
 
 
-def planet(use_euclidean):
-    def log_posterior(q):
+def planet(use_euclidean: bool) -> System:
+    def log_posterior(q: Position) -> Scalar:
         return 1.0 / jnp.sqrt(jnp.sum(q ** 2))
 
-    def metric(q):
+    def metric(q: Position) -> Array:
         return jnp.diag(jnp.ones_like(q))
 
     if use_euclidean:
@@ -37,7 +36,7 @@ def planet(use_euclidean):
     return riemannian(log_posterior, metric)
 
 
-def banana_problem(fixed, use_euclidean):
+def banana_problem(fixed: bool, use_euclidean: bool) -> System:
     t = 0.5
     sigma_y = 2.0
     sigma_theta = 2.0
@@ -51,7 +50,7 @@ def banana_problem(fixed, use_euclidean):
         + sigma_y * random.normal(size=(num_obs,))
     )
 
-    def log_posterior(q):
+    def log_posterior(q: Position) -> Scalar:
         p = q[0] + jnp.square(q[1])
         ll = jnp.sum(jnp.square(y - p)) / sigma_y ** 2
         lp = jnp.sum(jnp.square(theta)) / sigma_theta ** 2
@@ -59,12 +58,12 @@ def banana_problem(fixed, use_euclidean):
 
     if fixed:
 
-        def metric(q):
+        def metric(q: Position) -> Array:
             return 10 * jnp.diag(jnp.ones_like(q))
 
     else:
 
-        def metric(q):
+        def metric(q: Position) -> Array:
             n = y.size
             s = 2.0 * n * q[1] / sigma_y ** 2
             return jnp.array(
@@ -149,7 +148,9 @@ PROBLEMS = dict(
 )
 
 
-def integrate_system(system, N, step_size, q, p):
+def integrate_system(
+    system: System, N: int, step_size: float, q: Position, p: Momentum
+) -> Tuple[Scalar, Array, IntegratorState, Array]:
     kinetic_state = system.kinetic_tune_init(q.size)
     calc_energy = lambda q_, p_: system.potential(q_) + system.kinetic(
         kinetic_state, q_, p_
@@ -157,7 +158,9 @@ def integrate_system(system, N, step_size, q, p):
     state = system.integrator_init(kinetic_state, q, p)
     initial_energy = calc_energy(q, p)
 
-    def step(state, _):
+    def step(
+        state: IntegratorState, _: Any
+    ) -> Tuple[IntegratorState, Tuple[IntegratorState, Any]]:
         update = system.integrator_update(
             kinetic_state, state, step_size=step_size
         )
@@ -169,9 +172,9 @@ def integrate_system(system, N, step_size, q, p):
 
 
 @pytest.mark.parametrize("problem_name", sorted(PROBLEMS.keys()))
-def test_energy_conservation(problem_name):
+def test_energy_conservation(problem_name: str) -> None:
     problem = PROBLEMS[problem_name]
-    system = problem.builder()
+    system = problem.builder()  # type: ignore
     initial_energy, energy, _, _ = jax.jit(
         partial(integrate_system, system, problem.num_steps, problem.step_size)
     )(problem.q, problem.p)
@@ -181,9 +184,9 @@ def test_energy_conservation(problem_name):
 
 
 @pytest.mark.parametrize("problem_name", sorted(PROBLEMS.keys()))
-def test_reversibility(problem_name):
+def test_reversibility(problem_name: str) -> None:
     problem = PROBLEMS[problem_name]
-    system = problem.builder()
+    system = problem.builder()  # type: ignore
     func = jax.jit(
         partial(integrate_system, system, problem.num_steps, problem.step_size)
     )
