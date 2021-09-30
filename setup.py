@@ -24,7 +24,11 @@ CLASSIFIERS = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
 ]
-INSTALL_REQUIRES = ["jax", "jaxlib"]
+INSTALL_REQUIRES = [
+    "jax",
+    "jaxlib",
+    "typing_extensions; python_version < '3.8'",
+]
 EXTRA_REQUIRE = {
     "docs": ["sphinx>=1.7.5", "myst-nb"],
     "test": ["pytest", "pytest-cov"],
