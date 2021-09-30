@@ -8,7 +8,14 @@ import numpy as np
 import pytest
 
 from rmhmc.base_types import Array, Momentum, Position, Scalar
-from rmhmc.hamiltonian import System, euclidean, riemannian
+from rmhmc.hamiltonian import (
+    System,
+    compute_total_energy,
+    euclidean,
+    integrate,
+    integrate_trajectory,
+    riemannian,
+)
 from rmhmc.integrator import IntegratorState
 
 
@@ -148,23 +155,19 @@ PROBLEMS = dict(
 )
 
 
-def integrate_system(
-    system: System, N: int, step_size: float, q: Position, p: Momentum
+def run(
+    system: System, num_steps: int, step_size: float, q: Position, p: Momentum
 ) -> Tuple[Scalar, Array, IntegratorState, Array]:
     kinetic_state = system.kinetic_tune_init(q.size)
-    calc_energy = lambda q_, p_: system.potential(q_) + system.kinetic(
-        kinetic_state, q_, p_
-    )
     state = system.integrator_init(kinetic_state, q, p)
+
+    calc_energy = partial(compute_total_energy, system, kinetic_state)
     initial_energy = calc_energy(q, p)
 
-    def step(
-        state: IntegratorState, _: Any
-    ) -> Tuple[IntegratorState, Tuple[IntegratorState, Any]]:
-        update = system.integrator_update(step_size, kinetic_state, state)
-        return update[0], update
+    trace, success = integrate_trajectory(
+        system, num_steps, step_size, kinetic_state, state
+    )
 
-    trace, success = jax.lax.scan(step, state, jnp.arange(N))[1]
     energy = jax.vmap(calc_energy)(trace.q, trace.p)
     return initial_energy, energy, trace, success
 
@@ -174,7 +177,7 @@ def test_energy_conservation(problem_name: str) -> None:
     problem = PROBLEMS[problem_name]
     system = problem.builder()  # type: ignore
     initial_energy, energy, _, _ = jax.jit(
-        partial(integrate_system, system, problem.num_steps, problem.step_size)
+        partial(run, system, problem.num_steps, problem.step_size)
     )(problem.q, problem.p)
     np.testing.assert_allclose(
         energy, initial_energy, atol=problem.energy_prec
@@ -185,11 +188,41 @@ def test_energy_conservation(problem_name: str) -> None:
 def test_reversibility(problem_name: str) -> None:
     problem = PROBLEMS[problem_name]
     system = problem.builder()  # type: ignore
-    func = jax.jit(
-        partial(integrate_system, system, problem.num_steps, problem.step_size)
-    )
+    func = jax.jit(partial(run, system, problem.num_steps, problem.step_size))
     _, _, trace, _ = func(problem.q, problem.p)
     _, _, rev_trace, _ = func(trace.q[-1], -trace.p[-1])
     np.testing.assert_allclose(
         trace.q[:-1][::-1], rev_trace.q[:-1], atol=problem.pos_prec
     )
+
+
+@pytest.mark.parametrize("problem_name", sorted(PROBLEMS.keys()))
+def test_integrate(problem_name: str) -> None:
+    problem = PROBLEMS[problem_name]
+    system = problem.builder()  # type: ignore
+
+    kinetic_state = system.kinetic_tune_init(problem.q.size)
+    state = system.integrator_init(kinetic_state, problem.q, problem.p)
+    final_state, success = jax.jit(
+        partial(
+            integrate,
+            system,
+            problem.num_steps,
+            problem.step_size,
+            kinetic_state,
+        )
+    )(state)
+    assert success
+    trajectory, success = jax.jit(
+        partial(
+            integrate_trajectory,
+            system,
+            problem.num_steps,
+            problem.step_size,
+            kinetic_state,
+        )
+    )(state)
+    assert np.all(success)
+
+    for v, t in zip(final_state, trajectory):
+        np.testing.assert_allclose(v, t[-1])

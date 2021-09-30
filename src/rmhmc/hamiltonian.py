@@ -1,10 +1,16 @@
-__all__ = ["euclidean", "riemannian"]
+__all__ = [
+    "euclidean",
+    "riemannian",
+    "compute_total_energy",
+    "integrate",
+    "integrate_trajectory",
+]
 
-from typing import Callable, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional, Tuple
 
 import jax.numpy as jnp
 import jax.scipy as jsp
-from jax import random
+from jax import lax, random
 from jax.flatten_util import ravel_pytree
 
 from .base_types import (
@@ -19,6 +25,7 @@ from .base_types import (
 )
 from .integrator import (
     IntegratorInitFunction,
+    IntegratorState,
     IntegratorUpdateFunction,
     implicit_midpoint,
     leapfrog,
@@ -184,3 +191,46 @@ def riemannian(
         integrator_init=integrator_init,
         integrator_update=integrator_update,
     )
+
+
+def compute_total_energy(
+    system: System, kinetic_state: KineticState, q: Position, p: Momentum
+) -> Scalar:
+    return system.potential(q) + system.kinetic(kinetic_state, q, p)
+
+
+def integrate(
+    system: System,
+    num_steps: Scalar,
+    step_size: Scalar,
+    kinetic_state: KineticState,
+    state: IntegratorState,
+) -> Tuple[IntegratorState, bool]:
+    def step(
+        _: Scalar, carry: Tuple[IntegratorState, bool]
+    ) -> Tuple[IntegratorState, bool]:
+        state_, success_ = system.integrator_update(
+            step_size, kinetic_state, carry[0]
+        )
+        return state_, jnp.logical_and(success_, carry[1])
+
+    return lax.fori_loop(0, num_steps, step, (state, True))
+
+
+def integrate_trajectory(
+    system: System,
+    num_steps: int,
+    step_size: Scalar,
+    kinetic_state: KineticState,
+    state: IntegratorState,
+) -> Tuple[IntegratorState, Array]:
+    def step(
+        carry: Tuple[IntegratorState, bool], _: Any
+    ) -> Tuple[Tuple[IntegratorState, bool], Tuple[IntegratorState, bool]]:
+        state_, success_ = system.integrator_update(
+            step_size, kinetic_state, carry[0]
+        )
+        result = state_, jnp.logical_and(success_, carry[1])
+        return result, result
+
+    return lax.scan(step, (state, True), jnp.arange(num_steps))[1]
