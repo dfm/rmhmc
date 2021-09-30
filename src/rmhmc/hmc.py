@@ -59,7 +59,7 @@
 #             0,
 #             num_steps,
 #             lambda _, coords: system.integrator_update_fn(
-#                 state.kinetic_state, coords, epsilon=state.step_size
+#                 state.kinetic_state, coords, step_size=state.step_size
 #             ),
 #             initial_coords,
 #         )

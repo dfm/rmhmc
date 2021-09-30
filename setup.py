@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# type: ignore
 
 # Inspired by:
 # https://hynek.me/articles/sharing-your-labor-of-love-pypi-quick-and-dirty/

@@ -1,7 +1,7 @@
 __all__ = ["euclidean", "riemannian"]
 
 from dataclasses import dataclass
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Optional
 
 import jax.numpy as jnp
 import jax.scipy as jsp
@@ -16,6 +16,7 @@ from .base_types import (
     Position,
     PotentialFunction,
     Scalar,
+    register_pytree_node_dataclass,
 )
 from .integrator import (
     IntegratorInitFunction,
@@ -25,6 +26,7 @@ from .integrator import (
 )
 
 
+@register_pytree_node_dataclass
 @dataclass(frozen=True)
 class EuclideanKineticState(KineticState):
     count: Scalar
@@ -54,7 +56,10 @@ class System(NamedTuple):
 
 
 def euclidean(
-    log_probability_fn: Callable[[Position], Scalar], diagonal: bool = True
+    log_probability_fn: Callable[[Position], Scalar],
+    cov: Optional[Array] = None,
+    tril: Optional[Array] = None,
+    diagonal: bool = True,
 ) -> System:
     def potential(q: Position) -> Scalar:
         return -log_probability_fn(q)
@@ -83,10 +88,24 @@ def euclidean(
         )
 
     def kinetic_tune_init(size: int) -> KineticState:
-        shape = (size,) if diagonal else (size, size)
+        if cov is not None:
+            assert tril is None
+            if cov.ndim == 2:
+                tril_ = jsp.linalg.cholesky(cov, lower=True)
+            else:
+                tril_ = jnp.sqrt(cov)
+            shape = tril_.shape
+            assert shape == (size, size) or shape == (size,)
+        elif tril is not None:
+            tril_ = tril
+            shape = tril_.shape
+            assert shape == (size, size) or shape == (size,)
+        else:
+            shape = (size,) if diagonal else (size, size)
+            tril_ = jnp.ones(size) if diagonal else jnp.eye(size)
         mu = jnp.zeros(shape[-1])
         m2 = jnp.zeros(shape)
-        return EuclideanKineticState(count=0, tril=jnp.eye(size), mu=mu, m2=m2)
+        return EuclideanKineticState(count=0, tril=tril_, mu=mu, m2=m2)
 
     def kinetic_tune_update(state: KineticState, q: Position) -> KineticState:
         assert isinstance(state, EuclideanKineticState)

@@ -16,15 +16,18 @@ from .base_types import (
     Position,
     PotentialFunction,
     Scalar,
+    register_pytree_node_dataclass,
 )
 
 
+@register_pytree_node_dataclass
 @dataclass(frozen=True)
 class IntegratorState:
     q: Position
     p: Momentum
 
 
+@register_pytree_node_dataclass
 @dataclass(frozen=True)
 class LeapfrogState(IntegratorState):
     dUdq: Position
@@ -43,7 +46,7 @@ class LeapfrogUpdateFunction(Protocol):
         __kinetic_state: KineticState,
         __state: LeapfrogState,
         *,
-        epsilon: Scalar
+        step_size: Scalar
     ) -> Tuple[LeapfrogState, bool]:
         ...
 
@@ -57,20 +60,21 @@ def leapfrog(
         return LeapfrogState(q, p, dU(q))
 
     def update_fn(
-        kinetic_state: KineticState, state: LeapfrogState, *, epsilon: Scalar
+        kinetic_state: KineticState, state: LeapfrogState, *, step_size: Scalar
     ) -> Tuple[LeapfrogState, bool]:
         p = tree_map(
-            lambda p, dUdq: p - 0.5 * epsilon * dUdq, state.p, state.dUdq
+            lambda p, dUdq: p - 0.5 * step_size * dUdq, state.p, state.dUdq
         )
         dTdp = jax.grad(kinetic_fn, argnums=2)(kinetic_state, None, p)
-        q = tree_map(lambda q, dTdp: q + epsilon * dTdp, state.q, dTdp)
+        q = tree_map(lambda q, dTdp: q + step_size * dTdp, state.q, dTdp)
         dUdq = dU(q)
-        p = tree_map(lambda p, dUdq: p - 0.5 * epsilon * dUdq, p, dUdq)
+        p = tree_map(lambda p, dUdq: p - 0.5 * step_size * dUdq, p, dUdq)
         return LeapfrogState(q, p, dUdq), True
 
     return init_fn, update_fn
 
 
+@register_pytree_node_dataclass
 @dataclass(frozen=True)
 class ImplicitMidpointState(IntegratorState):
     dHdq: Position
@@ -90,7 +94,7 @@ class ImplicitMidpointUpdateFunction(Protocol):
         __kinetic_state: KineticState,
         __state: ImplicitMidpointState,
         *,
-        epsilon: Scalar
+        step_size: Scalar
     ) -> Tuple[ImplicitMidpointState, bool]:
         ...
 
@@ -113,26 +117,26 @@ def implicit_midpoint(
         kinetic_state: KineticState,
         state: ImplicitMidpointState,
         *,
-        epsilon: Scalar
+        step_size: Scalar
     ) -> Tuple[ImplicitMidpointState, bool]:
         def step(args: Tuple[Position, Momentum]) -> Tuple[Position, Momentum]:
             q, p = args
             dHdq, dHdp = vector_field(kinetic_state, q, p)
             return (
-                state.q + 0.5 * epsilon * dHdp,
-                state.p - 0.5 * epsilon * dHdq,
+                state.q + 0.5 * step_size * dHdp,
+                state.p - 0.5 * step_size * dHdq,
             )
 
         # Use an initial half step using the pre-computed vector field
-        q = state.q + 0.5 * epsilon * state.dHdp
-        p = state.p - 0.5 * epsilon * state.dHdq
+        q = state.q + 0.5 * step_size * state.dHdp
+        p = state.p - 0.5 * step_size * state.dHdq
 
         # Solve for the midpoint
         (q, p), success = solve_fixed_point(step, (q, p), **solver_kwargs)
 
         # Compute the resulting vector field and update the state
-        dHdq = (2.0 / epsilon) * (state.p - p)
-        dHdp = (2.0 / epsilon) * (q - state.q)
+        dHdq = (2.0 / step_size) * (state.p - p)
+        dHdp = (2.0 / step_size) * (q - state.q)
         q = 2 * q - state.q
         p = 2 * p - state.p
 
