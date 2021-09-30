@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 
-__all__ = []
+__all__ = ["hamiltonian", "integrator"]
 
+from . import hamiltonian, integrator
 from .rmhmc_version import __version__  # noqa
-
-from . import hamiltonian, hmc, integrator
 
 __uri__ = "https://github.com/dfm/rmhmc"
 __author__ = "Dan Foreman-Mackey"
