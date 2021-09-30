@@ -12,8 +12,16 @@ from rmhmc.base_types import Momentum, Position
 from rmhmc.hamiltonian import System, euclidean, riemannian
 
 
-def sho():
-    pass
+def sho(use_euclidean):
+    def log_posterior(q):
+        return -0.5 * jnp.sum(q ** 2)
+
+    def metric(q):
+        return jnp.diag(jnp.ones_like(q))
+
+    if use_euclidean:
+        return euclidean(log_posterior)
+    return riemannian(log_posterior, metric)
 
 
 def banana_problem(fixed, use_euclidean):
@@ -68,19 +76,29 @@ class Problem(NamedTuple):
     p: Momentum
     num_steps: int
     step_size: float
-    energy_assert_args: Dict[str, Any]
-    reverse_assert_args: Dict[str, Any]
 
 
 PROBLEMS = dict(
+    sho_riemannian=Problem(
+        partial(sho, False),
+        jnp.array([0.1]),
+        jnp.array([2.0]),
+        2000,
+        0.01,
+    ),
+    sho_euclidean=Problem(
+        partial(sho, True),
+        jnp.array([0.1]),
+        jnp.array([2.0]),
+        2000,
+        0.01,
+    ),
     banana_riemannian=Problem(
         partial(banana_problem, False, False),
         jnp.array([0.1, 0.3]),
         jnp.array([2.0, 0.5]),
         2000,
-        0.01,
-        dict(rtol=0.2),
-        dict(atol=5e-5),
+        0.001,
     ),
     banana_fixed=Problem(
         partial(banana_problem, True, False),
@@ -88,24 +106,20 @@ PROBLEMS = dict(
         jnp.array([2.0, 0.5]),
         2000,
         0.001,
-        dict(rtol=0.2),
-        dict(atol=5e-5),
     ),
     banana_euclidean=Problem(
         partial(banana_problem, True, True),
         jnp.array([0.1, 0.3]),
         jnp.array([2.0, 0.5]),
         2000,
-        0.01,
-        dict(rtol=0.2),
-        dict(atol=5e-5),
+        0.001,
     ),
 )
 
 
 def integrate_system(system, N, step_size, q, p):
     kinetic_state = system.kinetic_tune_init(q.size)
-    calc_energy = lambda q_, p_: system.potential(q) + system.kinetic(
+    calc_energy = lambda q_, p_: system.potential(q_) + system.kinetic(
         kinetic_state, q_, p_
     )
     state = system.integrator_init(kinetic_state, q, p)
@@ -129,9 +143,14 @@ def test_energy_conservation(problem_name):
     initial_energy, energy, _, _ = jax.jit(
         partial(integrate_system, system, problem.num_steps, problem.step_size)
     )(problem.q, problem.p)
-    np.testing.assert_allclose(
-        energy, initial_energy, **problem.energy_assert_args
-    )
+
+    import matplotlib.pyplot as plt
+
+    plt.figure()
+    plt.plot(energy)
+    plt.savefig(f"test_{problem_name}.png")
+
+    np.testing.assert_allclose(energy, initial_energy, atol=2e-3)
 
 
 @pytest.mark.parametrize("problem_name", sorted(PROBLEMS.keys()))
@@ -143,6 +162,4 @@ def test_reversibility(problem_name):
     )
     _, _, trace, _ = func(problem.q, problem.p)
     _, _, rev_trace, _ = func(trace.q[-1], -trace.p[-1])
-    np.testing.assert_allclose(
-        trace.q[:-1][::-1], rev_trace.q[:-1], **problem.reverse_assert_args
-    )
+    np.testing.assert_allclose(trace.q[:-1][::-1], rev_trace.q[:-1], atol=5e-5)
