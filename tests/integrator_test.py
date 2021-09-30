@@ -1,5 +1,6 @@
 # type: ignore
 
+import dataclasses
 from functools import partial
 from typing import Any, Callable, Dict, NamedTuple, OrderedDict
 
@@ -15,6 +16,18 @@ from rmhmc.hamiltonian import System, euclidean, riemannian
 def sho(use_euclidean):
     def log_posterior(q):
         return -0.5 * jnp.sum(q ** 2)
+
+    def metric(q):
+        return jnp.diag(jnp.ones_like(q))
+
+    if use_euclidean:
+        return euclidean(log_posterior)
+    return riemannian(log_posterior, metric)
+
+
+def planet(use_euclidean):
+    def log_posterior(q):
+        return 1.0 / jnp.sqrt(jnp.sum(q ** 2))
 
     def metric(q):
         return jnp.diag(jnp.ones_like(q))
@@ -70,12 +83,15 @@ def banana_problem(fixed, use_euclidean):
     return riemannian(log_posterior, metric)
 
 
-class Problem(NamedTuple):
+@dataclasses.dataclass(frozen=True)
+class Problem:
     builder: Callable[[], System]
     q: Position
     p: Momentum
     num_steps: int
     step_size: float
+    energy_prec: float = 1e-4
+    pos_prec: float = 5e-5
 
 
 PROBLEMS = dict(
@@ -90,6 +106,21 @@ PROBLEMS = dict(
         partial(sho, True),
         jnp.array([0.1]),
         jnp.array([2.0]),
+        2000,
+        0.01,
+    ),
+    planet_riemannian=Problem(
+        partial(planet, False),
+        jnp.array([1.0, 0.0]),
+        jnp.array([0.0, 1.0]),
+        2000,
+        0.01,
+        pos_prec=5e-4,
+    ),
+    planet_euclidean=Problem(
+        partial(planet, True),
+        jnp.array([1.0, 0.0]),
+        jnp.array([0.0, 1.0]),
         2000,
         0.01,
     ),
@@ -113,6 +144,7 @@ PROBLEMS = dict(
         jnp.array([2.0, 0.5]),
         2000,
         0.001,
+        energy_prec=0.002,
     ),
 )
 
@@ -143,14 +175,9 @@ def test_energy_conservation(problem_name):
     initial_energy, energy, _, _ = jax.jit(
         partial(integrate_system, system, problem.num_steps, problem.step_size)
     )(problem.q, problem.p)
-
-    import matplotlib.pyplot as plt
-
-    plt.figure()
-    plt.plot(energy)
-    plt.savefig(f"test_{problem_name}.png")
-
-    np.testing.assert_allclose(energy, initial_energy, atol=2e-3)
+    np.testing.assert_allclose(
+        energy, initial_energy, atol=problem.energy_prec
+    )
 
 
 @pytest.mark.parametrize("problem_name", sorted(PROBLEMS.keys()))
@@ -162,4 +189,6 @@ def test_reversibility(problem_name):
     )
     _, _, trace, _ = func(problem.q, problem.p)
     _, _, rev_trace, _ = func(trace.q[-1], -trace.p[-1])
-    np.testing.assert_allclose(trace.q[:-1][::-1], rev_trace.q[:-1], atol=5e-5)
+    np.testing.assert_allclose(
+        trace.q[:-1][::-1], rev_trace.q[:-1], atol=problem.pos_prec
+    )
