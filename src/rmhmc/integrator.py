@@ -1,7 +1,6 @@
 __all__ = ["leapfrog", "implicit_midpoint"]
 
-from dataclasses import dataclass
-from typing import Any, Callable, Tuple, Union
+from typing import Any, Callable, NamedTuple, Tuple, Union
 
 import jax
 import jax.numpy as jnp
@@ -16,52 +15,43 @@ from .base_types import (
     Position,
     PotentialFunction,
     Scalar,
-    register_pytree_node_dataclass,
 )
 
 
-@register_pytree_node_dataclass
-@dataclass(frozen=True)
-class IntegratorState:
+class LeapfrogState(NamedTuple):
     q: Position
     p: Momentum
-
-
-@register_pytree_node_dataclass
-@dataclass(frozen=True)
-class LeapfrogState(IntegratorState):
     dUdq: Position
 
 
-class LeapfrogInitFunction(Protocol):
-    def __call__(
-        self, __kinetic_state: KineticState, __q: Position, __p: Momentum
-    ) -> LeapfrogState:
-        ...
+class ImplicitMidpointState(NamedTuple):
+    q: Position
+    p: Momentum
+    dHdq: Position
+    dHdp: Momentum
 
 
-class LeapfrogUpdateFunction(Protocol):
-    def __call__(
-        self,
-        __kinetic_state: KineticState,
-        __state: LeapfrogState,
-        *,
-        step_size: Scalar
-    ) -> Tuple[LeapfrogState, bool]:
-        ...
+IntegratorState = Union[LeapfrogState, ImplicitMidpointState]
+IntegratorInitFunction = Callable[
+    [KineticState, Position, Momentum], IntegratorState
+]
+IntegratorUpdateFunction = Callable[
+    [Scalar, KineticState, IntegratorState], Tuple[IntegratorState, bool]
+]
 
 
 def leapfrog(
     potential_fn: PotentialFunction, kinetic_fn: KineticFunction
-) -> Tuple[LeapfrogInitFunction, LeapfrogUpdateFunction]:
+) -> Tuple[IntegratorInitFunction, IntegratorUpdateFunction]:
     dU = jax.grad(potential_fn)
 
-    def init_fn(_: KineticState, q: Position, p: Momentum) -> LeapfrogState:
+    def init_fn(_: KineticState, q: Position, p: Momentum) -> IntegratorState:
         return LeapfrogState(q, p, dU(q))
 
     def update_fn(
-        kinetic_state: KineticState, state: LeapfrogState, *, step_size: Scalar
-    ) -> Tuple[LeapfrogState, bool]:
+        step_size: Scalar, kinetic_state: KineticState, state: IntegratorState
+    ) -> Tuple[IntegratorState, bool]:
+        assert isinstance(state, LeapfrogState)
         p = tree_map(
             lambda p, dUdq: p - 0.5 * step_size * dUdq, state.p, state.dUdq
         )
@@ -74,51 +64,27 @@ def leapfrog(
     return init_fn, update_fn
 
 
-@register_pytree_node_dataclass
-@dataclass(frozen=True)
-class ImplicitMidpointState(IntegratorState):
-    dHdq: Position
-    dHdp: Momentum
-
-
-class ImplicitMidpointInitFunction(Protocol):
-    def __call__(
-        self, __kinetic_state: KineticState, __q: Position, __p: Momentum
-    ) -> ImplicitMidpointState:
-        ...
-
-
-class ImplicitMidpointUpdateFunction(Protocol):
-    def __call__(
-        self,
-        __kinetic_state: KineticState,
-        __state: ImplicitMidpointState,
-        *,
-        step_size: Scalar
-    ) -> Tuple[ImplicitMidpointState, bool]:
-        ...
-
-
 def implicit_midpoint(
     potential_fn: PotentialFunction,
     kinetic_fn: KineticFunction,
     **solver_kwargs: Any
-) -> Tuple[ImplicitMidpointInitFunction, ImplicitMidpointUpdateFunction]:
+) -> Tuple[IntegratorInitFunction, IntegratorUpdateFunction]:
     hamiltonian = lambda state, q, p: potential_fn(q) + kinetic_fn(state, q, p)
     vector_field = jax.grad(hamiltonian, argnums=(1, 2))
 
     def init_fn(
         kinetic_state: KineticState, q: Position, p: Momentum
-    ) -> ImplicitMidpointState:
+    ) -> IntegratorState:
         dHdq, dHdp = vector_field(kinetic_state, q, p)
         return ImplicitMidpointState(q, p, dHdq, dHdp)
 
     def update_fn(
+        step_size: Scalar,
         kinetic_state: KineticState,
-        state: ImplicitMidpointState,
-        *,
-        step_size: Scalar
-    ) -> Tuple[ImplicitMidpointState, bool]:
+        state: IntegratorState,
+    ) -> Tuple[IntegratorState, bool]:
+        assert isinstance(state, ImplicitMidpointState)
+
         def step(args: Tuple[Position, Momentum]) -> Tuple[Position, Momentum]:
             q, p = args
             dHdq, dHdp = vector_field(kinetic_state, q, p)
@@ -177,11 +143,3 @@ def solve_fixed_point(
     )
     success = jnp.isfinite(norm) & (norm <= convergence_tol)
     return x, success
-
-
-IntegratorInitFunction = Union[
-    LeapfrogInitFunction, ImplicitMidpointInitFunction
-]
-IntegratorUpdateFunction = Union[
-    LeapfrogUpdateFunction, ImplicitMidpointUpdateFunction
-]

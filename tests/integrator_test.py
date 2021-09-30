@@ -161,9 +161,7 @@ def integrate_system(
     def step(
         state: IntegratorState, _: Any
     ) -> Tuple[IntegratorState, Tuple[IntegratorState, Any]]:
-        update = system.integrator_update(
-            kinetic_state, state, step_size=step_size
-        )
+        update = system.integrator_update(step_size, kinetic_state, state)
         return update[0], update
 
     trace, success = jax.lax.scan(step, state, jnp.arange(N))[1]

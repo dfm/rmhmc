@@ -1,6 +1,5 @@
 __all__ = ["euclidean", "riemannian"]
 
-from dataclasses import dataclass
 from typing import Callable, NamedTuple, Optional
 
 import jax.numpy as jnp
@@ -10,13 +9,13 @@ from jax.flatten_util import ravel_pytree
 
 from .base_types import (
     Array,
+    EuclideanKineticState,
     KineticFunction,
     KineticState,
     Momentum,
     Position,
     PotentialFunction,
     Scalar,
-    register_pytree_node_dataclass,
 )
 from .integrator import (
     IntegratorInitFunction,
@@ -24,15 +23,6 @@ from .integrator import (
     implicit_midpoint,
     leapfrog,
 )
-
-
-@register_pytree_node_dataclass
-@dataclass(frozen=True)
-class EuclideanKineticState(KineticState):
-    count: Scalar
-    tril: Array
-    mu: Array
-    m2: Array
 
 
 class System(NamedTuple):
@@ -174,13 +164,13 @@ def riemannian(
 
     # This metric doesn't have any tuning parameters
     def kinetic_tune_init(_: int) -> KineticState:
-        return KineticState()
+        return None
 
     def kinetic_tune_update(state: KineticState, q: Position) -> KineticState:
-        return KineticState()
+        return None
 
     def kinetic_tune_finish(state: KineticState) -> KineticState:
-        return KineticState()
+        return None
 
     integrator_init, integrator_update = implicit_midpoint(potential, kinetic)
 
