@@ -89,7 +89,7 @@ PROBLEMS = dict(
         2000,
         0.001,
         dict(rtol=0.2),
-        dict(atol=1e-5),
+        dict(atol=5e-5),
     ),
     banana_euclidean=Problem(
         partial(banana_problem, True, True),
@@ -98,7 +98,7 @@ PROBLEMS = dict(
         2000,
         0.01,
         dict(rtol=0.2),
-        dict(atol=1e-5),
+        dict(atol=5e-5),
     ),
 )
 
