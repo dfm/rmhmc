@@ -1,6 +1,6 @@
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Dict, NamedTuple, OrderedDict, Tuple
+from typing import Any, Callable, Tuple
 
 import jax
 import jax.numpy as jnp
