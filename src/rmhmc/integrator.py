@@ -1,6 +1,6 @@
 __all__ = ["leapfrog", "implicit_midpoint"]
 
-from typing import Any, Callable, NamedTuple, Tuple, Union
+from typing import Any, Callable, NamedTuple, Optional, Tuple, Union
 
 import jax
 import jax.numpy as jnp
@@ -8,6 +8,7 @@ from jax.flatten_util import ravel_pytree
 from jax.tree_util import tree_map
 
 from .base_types import (
+    Array,
     KineticFunction,
     KineticState,
     Momentum,
@@ -39,6 +40,12 @@ IntegratorUpdateFunction = Callable[
 ]
 
 
+def _axpby(a: Scalar, x: Array, y: Array, b: Optional[Scalar] = None) -> Array:
+    if b is None:
+        return tree_map(lambda x_, y_: a * x_ + y_, x, y)
+    return tree_map(lambda x_, y_: a * x_ + b * y_, x, y)
+
+
 def leapfrog(
     potential_fn: PotentialFunction, kinetic_fn: KineticFunction
 ) -> Tuple[IntegratorInitFunction, IntegratorUpdateFunction]:
@@ -51,13 +58,11 @@ def leapfrog(
         step_size: Scalar, kinetic_state: KineticState, state: IntegratorState
     ) -> Tuple[IntegratorState, bool]:
         assert isinstance(state, LeapfrogState)
-        p = tree_map(
-            lambda p, dUdq: p - 0.5 * step_size * dUdq, state.p, state.dUdq
-        )
+        p = _axpby(-0.5 * step_size, state.dUdq, state.p)
         dTdp = jax.grad(kinetic_fn, argnums=2)(kinetic_state, None, p)
-        q = tree_map(lambda q, dTdp: q + step_size * dTdp, state.q, dTdp)
+        q = _axpby(step_size, dTdp, state.q)
         dUdq = dU(q)
-        p = tree_map(lambda p, dUdq: p - 0.5 * step_size * dUdq, p, dUdq)
+        p = _axpby(-0.5 * step_size, dUdq, p)
         return LeapfrogState(q, p, dUdq), True
 
     return init_fn, update_fn
@@ -88,22 +93,23 @@ def implicit_midpoint(
             q, p = args
             dHdq, dHdp = vector_field(kinetic_state, q, p)
             return (
-                state.q + 0.5 * step_size * dHdp,
-                state.p - 0.5 * step_size * dHdq,
+                _axpby(0.5 * step_size, dHdp, state.q),
+                _axpby(-0.5 * step_size, dHdq, state.p),
             )
 
         # Use an initial half step using the pre-computed vector field
-        q = state.q + 0.5 * step_size * state.dHdp
-        p = state.p - 0.5 * step_size * state.dHdq
+        q = _axpby(0.5 * step_size, state.dHdp, state.q)
+        p = _axpby(-0.5 * step_size, state.dHdq, state.p)
 
         # Solve for the midpoint
         (q, p), success = solve_fixed_point(step, (q, p), **solver_kwargs)
 
         # Compute the resulting vector field and update the state
-        dHdq = (2.0 / step_size) * (state.p - p)
-        dHdp = (2.0 / step_size) * (q - state.q)
-        q = 2 * q - state.q
-        p = 2 * p - state.p
+        a = 2.0 / step_size
+        dHdq = _axpby(-a, p, state.p, a)
+        dHdp = _axpby(a, q, state.q, -a)
+        q = _axpby(2.0, q, state.q, -1.0)
+        p = _axpby(2.0, p, state.p, -1.0)
 
         return ImplicitMidpointState(q, p, dHdq, dHdp), success
 
