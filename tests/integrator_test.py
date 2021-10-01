@@ -1,6 +1,6 @@
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Tuple
+from typing import Callable, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -197,6 +197,51 @@ def test_reversibility(problem_name: str) -> None:
 
 
 @pytest.mark.parametrize("problem_name", sorted(PROBLEMS.keys()))
+def test_volume_conservation(problem_name: str) -> None:
+    problem = PROBLEMS[problem_name]
+    system = problem.builder()  # type: ignore
+    kinetic_state = system.kinetic_tune_init(problem.q.size)
+    phi = jax.jit(
+        partial(
+            integrate,
+            system,
+            problem.num_steps,
+            problem.step_size,
+            kinetic_state,
+        )
+    )
+
+    qs = []
+    ps = []
+
+    eps = 1e-6
+    N = problem.q.size
+    for n in range(N):
+        delta = 0.5 * eps * jnp.eye(N, 1, -n)[:, 0]
+        print(delta)
+
+        q = problem.q + delta
+        plus, _ = phi(system.integrator_init(kinetic_state, q, problem.p))
+        q = problem.q - delta
+        minus, _ = phi(system.integrator_init(kinetic_state, q, problem.p))
+        qs.append((plus.q - minus.q) / eps)
+        ps.append((plus.p - minus.p) / eps)
+
+        p = problem.p + delta
+        plus, _ = phi(system.integrator_init(kinetic_state, problem.q, p))
+        p = problem.p - delta
+        minus, _ = phi(system.integrator_init(kinetic_state, problem.q, p))
+        qs.append((plus.q - minus.q) / eps)
+        ps.append((plus.p - minus.p) / eps)
+
+    F = jnp.concatenate(
+        (jnp.stack(qs, axis=0), jnp.stack(ps, axis=0)), axis=-1
+    )
+    _, ld = jnp.linalg.slogdet(F)
+    np.testing.assert_allclose(ld, 0.0, atol=1e-4)
+
+
+@pytest.mark.parametrize("problem_name", sorted(PROBLEMS.keys()))
 def test_integrate(problem_name: str) -> None:
     problem = PROBLEMS[problem_name]
     system = problem.builder()  # type: ignore
@@ -213,6 +258,7 @@ def test_integrate(problem_name: str) -> None:
         )
     )(state)
     assert success
+
     trajectory, success = jax.jit(
         partial(
             integrate_trajectory,
