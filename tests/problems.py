@@ -1,12 +1,18 @@
 import dataclasses
 from functools import partial
-from typing import Callable
+from typing import Callable, Tuple
 
 import jax.numpy as jnp
 import numpy as np
 from jax.flatten_util import ravel_pytree
 
-from rmhmc.base_types import Array, Momentum, Position, Scalar
+from rmhmc.base_types import (
+    Array,
+    Momentum,
+    Position,
+    PotentialFunction,
+    Scalar,
+)
 from rmhmc.hamiltonian import System, euclidean, riemannian
 
 
@@ -34,9 +40,9 @@ def planet(use_euclidean: bool) -> System:
     return riemannian(log_posterior, metric)
 
 
-def banana(
-    fixed: bool, use_euclidean: bool, *, return_metric: bool = False
-) -> System:
+def banana_logprob_and_metric() -> Tuple[
+    PotentialFunction, Callable[[Position], Array]
+]:
     t = 0.5
     sigma_y = 2.0
     sigma_theta = 2.0
@@ -56,31 +62,36 @@ def banana(
         lp = jnp.sum(jnp.square(theta)) / sigma_theta ** 2
         return -0.5 * (ll + lp)
 
+    def metric(q: Position) -> Array:
+        n = y.size
+        s = 2.0 * n * q[1] / sigma_y ** 2
+        return jnp.array(
+            [
+                [n / sigma_y ** 2 + 1.0 / sigma_theta ** 2, s],
+                [
+                    s,
+                    4.0 * n * jnp.square(q[1]) / sigma_y ** 2
+                    + 1.0 / sigma_theta ** 2,
+                ],
+            ]
+        )
+
+    return log_posterior, metric
+
+
+def banana(fixed: bool, use_euclidean: bool) -> System:
+    log_posterior, metric_ = banana_logprob_and_metric()
+
     if fixed:
 
-        def metric(q: Position) -> Array:
-            return 10 * jnp.diag(jnp.ones_like(q))
+        def metric(__q: Position) -> Array:
+            return 10 * jnp.diag(jnp.ones_like(__q))
 
     else:
-
-        def metric(q: Position) -> Array:
-            n = y.size
-            s = 2.0 * n * q[1] / sigma_y ** 2
-            return jnp.array(
-                [
-                    [n / sigma_y ** 2 + 1.0 / sigma_theta ** 2, s],
-                    [
-                        s,
-                        4.0 * n * jnp.square(q[1]) / sigma_y ** 2
-                        + 1.0 / sigma_theta ** 2,
-                    ],
-                ]
-            )
+        metric = metric_
 
     if fixed and use_euclidean:
         return euclidean(log_posterior)
-    if return_metric:
-        return metric, riemannian(log_posterior, metric)
     return riemannian(log_posterior, metric)
 
 

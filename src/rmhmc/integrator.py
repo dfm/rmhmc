@@ -51,8 +51,16 @@ def leapfrog(
 ) -> Tuple[IntegratorInitFunction, IntegratorUpdateFunction]:
     dU = jax.grad(potential_fn)
 
-    def init_fn(_: KineticState, q: Position, p: Momentum) -> IntegratorState:
-        return LeapfrogState(q, p, dU(q))
+    def init_fn(
+        _: KineticState,
+        q: Position,
+        p: Momentum,
+        *,
+        dUdq: Optional[Position] = None
+    ) -> IntegratorState:
+        if dUdq is None:
+            dUdq = dU(q)
+        return LeapfrogState(q, p, dUdq)
 
     def update_fn(
         step_size: Scalar, kinetic_state: KineticState, state: IntegratorState
@@ -73,13 +81,29 @@ def implicit_midpoint(
     kinetic_fn: KineticFunction,
     **solver_kwargs: Any
 ) -> Tuple[IntegratorInitFunction, IntegratorUpdateFunction]:
-    hamiltonian = lambda state, q, p: potential_fn(q) + kinetic_fn(state, q, p)
-    vector_field = jax.grad(hamiltonian, argnums=(1, 2))
+    dU = jax.grad(potential_fn)
+    dT = jax.grad(kinetic_fn, argnums=(1, 2))
+
+    def vector_field(
+        kinetic_state: KineticState,
+        q: Position,
+        p: Momentum,
+        *,
+        dUdq: Optional[Position] = None
+    ) -> Tuple[Position, Momentum]:
+        dTdq, dTdp = dT(kinetic_state, q, p)
+        if dUdq is None:
+            dUdq = dU(q)
+        return tree_map(jnp.add, dUdq, dTdq), dTdp
 
     def init_fn(
-        kinetic_state: KineticState, q: Position, p: Momentum
+        kinetic_state: KineticState,
+        q: Position,
+        p: Momentum,
+        *,
+        dUdq: Optional[Position] = None
     ) -> IntegratorState:
-        dHdq, dHdp = vector_field(kinetic_state, q, p)
+        dHdq, dHdp = vector_field(kinetic_state, q, p, dUdq=dUdq)
         return ImplicitMidpointState(q, p, dHdq, dHdp)
 
     def update_fn(

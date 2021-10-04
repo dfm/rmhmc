@@ -6,9 +6,9 @@ import pytest
 from jax import lax, random
 
 from rmhmc.base_types import Array, Momentum
-from rmhmc.hamiltonian import euclidean
+from rmhmc.hamiltonian import euclidean, riemannian
 
-from .problems import banana
+from .problems import banana_logprob_and_metric
 
 L = np.random.default_rng(9).normal(size=(5, 5))
 L[np.diag_indices_from(L)] = np.exp(L[np.diag_indices_from(L)])
@@ -49,7 +49,8 @@ def test_sample_momentum_euclidean(cov: Array) -> None:
     [jnp.array([0.1, 0.3]), jnp.array([-0.5, -0.5]), jnp.array([0.0, 0.0])],
 )
 def test_sample_momentum_riemannian(q: Array) -> None:
-    metric, system = banana(False, False, return_metric=True)
+    log_posterior, metric = banana_logprob_and_metric()
+    system = riemannian(log_posterior, metric)
     kinetic_state = system.kinetic_tune_init(2)
 
     M = metric(q)
