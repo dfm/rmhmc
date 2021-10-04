@@ -1,14 +1,14 @@
-from functools import partial
 from typing import Tuple
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax import lax, random, vmap
-from jax.flatten_util import ravel_pytree
+from jax import lax, random
 
 from rmhmc.base_types import Array, Momentum
-from rmhmc.hamiltonian import euclidean, riemannian
+from rmhmc.hamiltonian import euclidean
+
+from .problems import banana
 
 L = np.random.default_rng(9).normal(size=(5, 5))
 L[np.diag_indices_from(L)] = np.exp(L[np.diag_indices_from(L)])
@@ -42,3 +42,23 @@ def test_sample_momentum_euclidean(cov: Array) -> None:
     np.testing.assert_allclose(
         jnp.dot(cov, jnp.cov(result, rowvar=0)), np.eye(ndim), atol=0.05
     )
+
+
+@pytest.mark.parametrize(
+    "q",
+    [jnp.array([0.1, 0.3]), jnp.array([-0.5, -0.5]), jnp.array([0.0, 0.0])],
+)
+def test_sample_momentum_riemannian(q: Array) -> None:
+    metric, system = banana(False, False, return_metric=True)
+    kinetic_state = system.kinetic_tune_init(2)
+
+    M = metric(q)
+
+    def _sample(
+        key: random.KeyArray, _: int
+    ) -> Tuple[random.KeyArray, Momentum]:
+        key1, key2 = random.split(key)
+        return key2, system.sample_momentum(kinetic_state, q, key1)
+
+    _, result = lax.scan(_sample, random.PRNGKey(5), jnp.arange(1_000_000))
+    np.testing.assert_allclose(jnp.cov(result, rowvar=0), M, atol=0.05)

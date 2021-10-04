@@ -34,7 +34,9 @@ def planet(use_euclidean: bool) -> System:
     return riemannian(log_posterior, metric)
 
 
-def banana(fixed: bool, use_euclidean: bool) -> System:
+def banana(
+    fixed: bool, use_euclidean: bool, *, return_metric: bool = False
+) -> System:
     t = 0.5
     sigma_y = 2.0
     sigma_theta = 2.0
@@ -77,6 +79,8 @@ def banana(fixed: bool, use_euclidean: bool) -> System:
 
     if fixed and use_euclidean:
         return euclidean(log_posterior)
+    if return_metric:
+        return metric, riemannian(log_posterior, metric)
     return riemannian(log_posterior, metric)
 
 
