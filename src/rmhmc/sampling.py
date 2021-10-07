@@ -1,53 +1,77 @@
 __all__ = ["run", "sample"]
 
 import warnings
+from functools import partial
 from typing import List, Tuple
 
 import jax.numpy as jnp
 import numpy as np
-from jax import lax, random
+from jax import lax, local_device_count, pmap, random, vmap
+from jax._src.api import vmap
+from jax.tree_util import tree_flatten
 
 from rmhmc.base_types import Position, identity
-from rmhmc.hmc import HMCCarry, HMCSystem
+from rmhmc.hmc import MCMCKernel, SamplerCarry
 
 
 def sample(
-    system: HMCSystem,
+    kernel: MCMCKernel,
     rng_key: random.KeyArray,
-    q: Position,
+    initial_coords: Position,
     *,
     num_steps: int = 1000,
     num_tune: int = 1000,
+    num_chains: int = 2,
     initial_buffer_size: int = 75,
     first_window_size: int = 25,
     final_buffer_size: int = 75,
-) -> HMCCarry:
-    tune_key, sample_key = random.split(rng_key)
-    state = system.init(q)
-    state, _ = run(
-        system,
-        num_tune,
-        tune_key,
-        state,
-        tune=True,
-        initial_buffer_size=initial_buffer_size,
-        first_window_size=first_window_size,
-        final_buffer_size=final_buffer_size,
-    )
-    return run(system, num_steps, sample_key, state, tune=False)[1]
+    parallel: bool = True,
+) -> SamplerCarry:
+    def sample_one_chain(
+        rng_key: random.KeyArray, q: Position
+    ) -> SamplerCarry:
+        tune_key, sample_key = random.split(rng_key)
+        state = kernel.init(q)
+        state, _ = run(
+            kernel,
+            num_tune,
+            tune_key,
+            state,
+            tune=True,
+            initial_buffer_size=initial_buffer_size,
+            first_window_size=first_window_size,
+            final_buffer_size=final_buffer_size,
+        )
+        return run(kernel, num_steps, sample_key, state, tune=False)[1]
+
+    keys = random.split(rng_key, num_chains)
+    if num_chains > 1:
+        proto_init_val = tree_flatten(initial_coords)[0][0]
+        if jnp.shape(proto_init_val)[0] != num_chains:
+            raise ValueError(
+                "The leading dimension of the initial parameters must match num_chains"
+            )
+
+    parallel = parallel and num_chains <= local_device_count()
+    if parallel:
+        execute = pmap(sample_one_chain)
+    else:
+        execute = vmap(sample_one_chain)
+
+    return execute(keys, initial_coords)
 
 
 def run(
-    system: HMCSystem,
+    kernel: MCMCKernel,
     num_steps: int,
     rng_key: random.KeyArray,
-    state: HMCCarry,
+    state: SamplerCarry,
     *,
     tune: bool = False,
     initial_buffer_size: int = 75,
     first_window_size: int = 25,
     final_buffer_size: int = 75,
-) -> Tuple[HMCCarry, HMCCarry]:
+) -> Tuple[SamplerCarry, SamplerCarry]:
 
     if tune:
         schedule = jnp.asarray(
@@ -62,23 +86,23 @@ def run(
         schedule = jnp.zeros((num_steps, 2), dtype=bool)
 
     def step(
-        state: HMCCarry, args: Tuple[Tuple[bool, bool], random.KeyArray]
-    ) -> Tuple[HMCCarry, HMCCarry]:
+        state: SamplerCarry, args: Tuple[Tuple[bool, bool], random.KeyArray]
+    ) -> Tuple[SamplerCarry, SamplerCarry]:
         (slow_update, reset), rng_key = args
 
-        state_ = system.step(state, rng_key)
+        state_ = kernel.step(state, rng_key)
 
         # If we're tuning, update all the tuning parameters
         if tune:
-            state_ = system.fast_update(state_)
+            state_ = kernel.fast_update(state_)
 
             # Update the slow parameters if requested
             state_ = lax.cond(
-                slow_update, system.slow_update, identity, state_
+                slow_update, kernel.slow_update, identity, state_
             )
 
             # Reset the tuning parameters if requested
-            state_ = lax.cond(reset, system.reset, identity, state_)
+            state_ = lax.cond(reset, kernel.reset, identity, state_)
 
         return state_, state_
 
@@ -87,7 +111,7 @@ def run(
         step, state, (schedule, random.split(rng_key, num_steps))
     )
 
-    return system.tune_finish(state), trace
+    return kernel.tune_finish(state), trace
 
 
 def build_schedule(
@@ -134,9 +158,12 @@ def build_schedule(
 
     t = initial_buffer_size
     delta = first_window_size
-    update_steps = [(False, False)] * (initial_buffer_size - 1) + [
-        (False, True)
-    ]
+    if initial_buffer_size > 1:
+        update_steps = [(False, False)] * (initial_buffer_size - 1) + [
+            (False, True)
+        ]
+    else:
+        update_steps = []
     while t < num_steps - final_buffer_size:
         if t + 2 * delta > num_steps - final_buffer_size:
             d = num_steps - final_buffer_size - t

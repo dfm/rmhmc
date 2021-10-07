@@ -4,15 +4,7 @@ from typing import Callable, NamedTuple, Tuple
 
 import jax.numpy as jnp
 
-from .base_types import Scalar
-
-
-class DualAveragingState(NamedTuple):
-    count: Scalar
-    x: Scalar
-    x_avg: Scalar
-    g_avg: Scalar
-    mu: Scalar
+from .base_types import DualAveragingState, Scalar
 
 
 def dual_averaging(

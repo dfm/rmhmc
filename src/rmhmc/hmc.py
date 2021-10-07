@@ -7,40 +7,18 @@ import jax.numpy as jnp
 from jax import random
 from jax.flatten_util import ravel_pytree
 
-from rmhmc.base_types import KineticState, Position, Scalar
+from rmhmc.base_types import (
+    HMCState,
+    MCMCKernel,
+    Position,
+    ProposalStats,
+    SamplerCarry,
+    SamplerTuningState,
+    Scalar,
+)
 from rmhmc.hamiltonian import System, integrate
 from rmhmc.integrator import LeapfrogState
-from rmhmc.step_size import DualAveragingState, dual_averaging
-
-
-class HMCTuningState(NamedTuple):
-    step_size: Scalar
-    step_size_state: DualAveragingState
-    kinetic_state: KineticState
-
-
-class HMCState(NamedTuple):
-    q: Position
-    potential_energy: Scalar
-    potential_energy_grad: Position
-
-
-class StepStats(NamedTuple):
-    accept_prob: Scalar
-    accept: Scalar
-    diverging: Scalar
-
-
-HMCCarry = Tuple[HMCTuningState, HMCState, StepStats]
-
-
-class HMCSystem(NamedTuple):
-    init: Callable[[Position], HMCCarry]
-    step: Callable[[HMCCarry, random.KeyArray], HMCCarry]
-    reset: Callable[[HMCCarry], HMCCarry]
-    fast_update: Callable[[HMCCarry], HMCCarry]
-    slow_update: Callable[[HMCCarry], HMCCarry]
-    tune_finish: Callable[[HMCCarry], HMCCarry]
+from rmhmc.step_size import dual_averaging
 
 
 def hmc(
@@ -50,16 +28,16 @@ def hmc(
     initial_step_size: float = 1.0,
     target_accept_prob: float = 0.8,
     dual_averaging_args: Optional[Dict[str, float]] = None,
-) -> HMCSystem:
+) -> MCMCKernel:
     step_size_init_fn, step_size_update_fn = dual_averaging(
         **({} if dual_averaging_args is None else dual_averaging_args)
     )
     potential_and_grad = jax.value_and_grad(system.potential)
 
-    def init_fn(q: Position) -> HMCCarry:
+    def init_fn(q: Position) -> SamplerCarry:
         U, dU = potential_and_grad(q)
-        return (
-            HMCTuningState(
+        return SamplerCarry(
+            tuning=SamplerTuningState(
                 step_size=initial_step_size,
                 step_size_state=step_size_init_fn(
                     jnp.log(10.0 * initial_step_size)
@@ -68,19 +46,19 @@ def hmc(
                     ravel_pytree(q)[0].size
                 ),
             ),
-            HMCState(
+            state=HMCState(
                 q=q,
                 potential_energy=U,
                 potential_energy_grad=dU,
             ),
-            StepStats(
+            stats=ProposalStats(
                 accept_prob=1.0,
                 accept=True,
                 diverging=False,
             ),
         )
 
-    def step_fn(carry: HMCCarry, rng_key: random.KeyArray) -> HMCCarry:
+    def step_fn(carry: SamplerCarry, rng_key: random.KeyArray) -> SamplerCarry:
         tuning_state, state, _ = carry
 
         if callable(num_steps):
@@ -136,59 +114,59 @@ def hmc(
             potential_energy_grad=potential_energy_grad,
         )
 
-        return (
-            tuning_state,
-            jax.lax.cond(
+        return SamplerCarry(
+            tuning=tuning_state,
+            state=jax.lax.cond(
                 accept,
                 lambda _: final_state,
                 lambda _: state,
                 operand=None,
             ),
-            StepStats(
+            stats=ProposalStats(
                 accept_prob=accept_prob,
                 accept=accept,
                 diverging=diverging,
             ),
         )
 
-    def fast_update_fn(carry: HMCCarry) -> HMCCarry:
+    def fast_update_fn(carry: SamplerCarry) -> SamplerCarry:
         tuning_state, state, stats = carry
         step_size_state = step_size_update_fn(
             tuning_state.step_size_state,
             target_accept_prob - stats.accept_prob,
         )
-        return (
-            HMCTuningState(
+        return SamplerCarry(
+            tuning=SamplerTuningState(
                 step_size=jnp.exp(step_size_state.x),
                 step_size_state=step_size_state,
                 kinetic_state=system.kinetic_tune_update(
                     tuning_state.kinetic_state, state.q
                 ),
             ),
-            state,
-            stats,
+            state=state,
+            stats=stats,
         )
 
-    def slow_update_fn(carry: HMCCarry) -> HMCCarry:
+    def slow_update_fn(carry: SamplerCarry) -> SamplerCarry:
         tuning_state, state, stats = carry
         kinetic_state = system.kinetic_tune_update(
             tuning_state.kinetic_state, state.q
         )
-        return (
-            HMCTuningState(
+        return SamplerCarry(
+            tuning=SamplerTuningState(
                 step_size=initial_step_size,
                 step_size_state=step_size_init_fn(initial_step_size),
                 kinetic_state=system.kinetic_tune_finish(kinetic_state),
             ),
-            state,
-            stats,
+            state=state,
+            stats=stats,
         )
 
-    def reset_fn(carry: HMCCarry) -> HMCCarry:
+    def reset_fn(carry: SamplerCarry) -> SamplerCarry:
         _, state, stats = carry
         system.kinetic_tune_init(state.q.size)
-        return (
-            HMCTuningState(
+        return SamplerCarry(
+            tuning=SamplerTuningState(
                 step_size=initial_step_size,
                 step_size_state=step_size_init_fn(
                     jnp.log(10 * initial_step_size)
@@ -197,11 +175,11 @@ def hmc(
                     ravel_pytree(state.q)[0].size
                 ),
             ),
-            state,
-            stats,
+            state=state,
+            stats=stats,
         )
 
-    def tune_finish_fn(carry: HMCCarry) -> HMCCarry:
+    def tune_finish_fn(carry: SamplerCarry) -> SamplerCarry:
         tuning_state, state, stats = carry
         step_size_state = step_size_update_fn(
             tuning_state.step_size_state,
@@ -210,17 +188,17 @@ def hmc(
         kinetic_state = system.kinetic_tune_update(
             tuning_state.kinetic_state, state.q
         )
-        return (
-            HMCTuningState(
+        return SamplerCarry(
+            tuning=SamplerTuningState(
                 step_size=jnp.exp(step_size_state.x_avg),
                 step_size_state=step_size_init_fn(initial_step_size),
                 kinetic_state=system.kinetic_tune_finish(kinetic_state),
             ),
-            state,
-            stats,
+            state=state,
+            stats=stats,
         )
 
-    return HMCSystem(
+    return MCMCKernel(
         init=init_fn,
         step=step_fn,
         reset=reset_fn,
