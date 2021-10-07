@@ -21,16 +21,16 @@ def dual_averaging(
     Callable[[Scalar], DualAveragingState],
     Callable[[Scalar, DualAveragingState], DualAveragingState],
 ]:
-    def init_fn(init: Scalar = 1.0) -> DualAveragingState:
+    def init_fn(init: Scalar = 0.0) -> DualAveragingState:
         return DualAveragingState(
             count=jnp.array(0, dtype=jnp.result_type(int)),
-            x=jnp.log(init),
+            x=jnp.zeros(()),
             x_avg=jnp.zeros(()),
             g_avg=jnp.zeros(()),
-            mu=jnp.log(init) + jnp.log(10.0),
+            mu=init,
         )
 
-    def update_fn(g: Scalar, state: DualAveragingState) -> DualAveragingState:
+    def update_fn(state: DualAveragingState, g: Scalar) -> DualAveragingState:
         count, _, x_avg, g_avg, mu = state
         count += 1
         g_avg = (1 - 1 / (count + t0)) * g_avg + g / (count + t0)

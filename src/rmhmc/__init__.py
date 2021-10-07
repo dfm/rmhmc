@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
-__all__ = ["hamiltonian", "integrator"]
+__all__ = ["hamiltonian", "hmc", "integrator", "sampling"]
 
-from . import hamiltonian, integrator
+from . import hamiltonian, hmc, integrator, sampling
 from .rmhmc_version import __version__  # noqa
 
 __uri__ = "https://github.com/dfm/rmhmc"

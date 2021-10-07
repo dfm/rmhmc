@@ -1,4 +1,5 @@
 from functools import partial
+from os import stat
 from typing import Tuple
 
 import jax
@@ -17,7 +18,7 @@ from rmhmc.hamiltonian import (
 )
 from rmhmc.integrator import IntegratorState
 
-from .problems import PROBLEMS
+from .problems import PROBLEMS, banana
 
 
 def run(
@@ -148,3 +149,13 @@ def test_integrate(problem_name: str) -> None:
 
     for v, t in zip(final_state, trajectory):
         tree_map(lambda a, b: np.testing.assert_allclose(a, b[-1]), v, t)
+
+
+def test_divergence() -> None:
+    system = banana(False, False)
+    kinetic_state = system.kinetic_tune_init(2)
+    state = system.integrator_init(
+        kinetic_state, jnp.array([0.3, 0.5]), jnp.array([1.2, -0.3])
+    )
+    _, success = integrate(system, 50, 1000.0, kinetic_state, state)
+    assert not success

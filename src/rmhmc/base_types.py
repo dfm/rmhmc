@@ -16,3 +16,7 @@ class EuclideanKineticState(NamedTuple):
 KineticState = Optional[EuclideanKineticState]
 PotentialFunction = Callable[[Position], Scalar]
 KineticFunction = Callable[[KineticState, Position, Momentum], Scalar]
+
+
+def identity(x: Any) -> Any:
+    return x
