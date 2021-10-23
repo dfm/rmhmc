@@ -1,6 +1,6 @@
 __all__ = ["hmc"]
 
-from typing import Callable, Dict, NamedTuple, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Union
 
 import jax
 import jax.numpy as jnp
@@ -164,7 +164,7 @@ def hmc(
 
     def reset_fn(carry: SamplerCarry) -> SamplerCarry:
         _, state, stats = carry
-        system.kinetic_tune_init(state.q.size)
+        system.kinetic_tune_init(ravel_pytree(state.q)[0].size)
         return SamplerCarry(
             tuning=SamplerTuningState(
                 step_size=initial_step_size,

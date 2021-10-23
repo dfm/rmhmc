@@ -22,6 +22,7 @@ def sample(
     num_steps: int = 1000,
     num_tune: int = 1000,
     num_chains: int = 2,
+    tune_kinetic_energy: bool = True,
     initial_buffer_size: int = 75,
     first_window_size: int = 25,
     final_buffer_size: int = 75,
@@ -38,6 +39,7 @@ def sample(
             tune_key,
             state,
             tune=True,
+            tune_kinetic_energy=tune_kinetic_energy,
             initial_buffer_size=initial_buffer_size,
             first_window_size=first_window_size,
             final_buffer_size=final_buffer_size,
@@ -52,7 +54,12 @@ def sample(
                 "The leading dimension of the initial parameters must match num_chains"
             )
 
-    parallel = parallel and num_chains <= local_device_count()
+    if parallel and num_chains >= local_device_count():
+        warnings.warn(
+            f"Only {local_device_count()} devices are visible to JAX; chains will be "
+            "sampled sequentially"
+        )
+        parallel = False
     if parallel:
         execute = pmap(sample_one_chain)
     else:
@@ -68,20 +75,28 @@ def run(
     state: SamplerCarry,
     *,
     tune: bool = False,
+    tune_kinetic_energy: bool = True,
     initial_buffer_size: int = 75,
     first_window_size: int = 25,
     final_buffer_size: int = 75,
 ) -> Tuple[SamplerCarry, SamplerCarry]:
 
     if tune:
-        schedule = jnp.asarray(
-            build_schedule(
-                num_steps,
-                initial_buffer_size=initial_buffer_size,
-                final_buffer_size=final_buffer_size,
-                first_window_size=first_window_size,
+        if tune_kinetic_energy:
+            schedule = jnp.asarray(
+                build_schedule(
+                    num_steps,
+                    initial_buffer_size=initial_buffer_size,
+                    final_buffer_size=final_buffer_size,
+                    first_window_size=first_window_size,
+                )
             )
-        )
+        else:
+            schedule = jnp.zeros((num_steps, 2), dtype=bool)
+            if initial_buffer_size <= 1:
+                raise ValueError("'initial_buffer_size' must be >1")
+            schedule[initial_buffer_size - 1, 1] = True
+
     else:
         schedule = jnp.zeros((num_steps, 2), dtype=bool)
 

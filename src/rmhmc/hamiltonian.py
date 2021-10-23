@@ -106,6 +106,7 @@ def euclidean(
 
     def kinetic_tune_update(state: KineticState, q: Position) -> KineticState:
         assert isinstance(state, EuclideanKineticState)
+        q, _ = ravel_pytree(q)
         n = state.count + 1
         d1 = q - state.mu
         mu = state.mu + d1 / n
@@ -164,7 +165,6 @@ def riemannian(
     ) -> Momentum:
         metric = metric_fn(q)
         q, unravel = ravel_pytree(q)
-        metric = metric_fn(q)
         tril, _ = jsp.linalg.cho_factor(metric, lower=True)
         eps = random.normal(rng_key, q.shape)
         return unravel(jnp.dot(tril, eps))
